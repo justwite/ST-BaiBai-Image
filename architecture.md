@@ -230,19 +230,39 @@ runForFloor(floor, opts)
 ```
 
 消息顺序(prompt.ts 固定):破限 system → 角色卡 system → persona system → 世界书 system →
-后端规范 system(ComfyUI/NAI 内置 spec,`{{nl}}` 宏按「生成自然语言」开关展开)→ 固定协议
+规范 system(按下方「规范口径」取,`{{nl}}` 宏按「生成自然语言」开关展开)→ 固定协议
 (身份定义 + 输出契约:一个 `<thinking>` 块和一个 JSON 对象,JSON 含 images + changes)→ 思维链 system → user(角色参考 + 角色库 + 清洗后的最近 N 个 AI 故事楼及其间 user 楼 + 带段尾位置 ID 的目标正文)
 → assistant 预填充(`<thinking>`,渠道关闭 prefill 时由 client 丢弃)。
 
 全部可编辑提示词(破限/规范/思维链/预填充)在 `state/settings.ts` 有内置默认常量
 (`DEFAULT_*_PROMPT`/`DEFAULT_*_SPEC`),留空回落默认 —— 改默认提示词内容先看这里。
 
+**规范口径(profile)是比「后端」更准的那一层。** `prompt.ts` 的 `activeSpecProfile()` 把
+渠道映射成 `'nai' | 'comfy' | 'none'`:ComfyUI 渠道恒 `comfy`,webui(渠道已隐藏)恒 `none`
+不附加规范,而 **NAI 渠道由面板上的 `NaiSettings.specProfile` 决定** —— 可以主动借用 ComfyUI
+那套。口径必须**同时**决定三件事,任何一处单独变化都会组装出自相矛盾的请求
+(最典型:规范教单串 tag、固定协议却仍要求 `characters[]`):
+
+| 口径 | 规范 | 思维链 | 输出结构 |
+|---|---|---|---|
+| `nai` | `naiV5Spec` | `naiV5Thinking` | Base + 原生 `characters[]` |
+| `comfy` | `comfySpec` | `comfyThinking` | 单串 danbooru tag(邻接绑定),无 `characters[]` |
+| `none` | 不附加 | `comfyThinking`(回落;该渠道尚未接入) | — |
+
+「生成自然语言」开关与口径**解耦**:NAI 渠道读 `NaiSettings.naturalLanguage`,ComfyUI 渠道读
+当前工作流预设的 `naturalLanguage` —— 切口径不替用户改开关,反之亦然。关掉 nl 时规范、思维链、
+`outputShape` 示例三处必须一起不提 nl:只关一半会留下带 nl 键的示例,而示例是格式的最强信号,
+模型照抄示例 = 开关静默失效。NAI 规范的 nl 内容因此抽成两处宏(`{{nl}}` 与 `{{nl_example}}`),
+由 `expandNaiSpec()` 一并展开;NAI 思维链则照 ComfyUI 那份的先例改用「要求 nl 时」的条件措辞。
+
 ⚠ **设置页只暴露两对规范/思维链:ComfyUI 与 NAI**,后者存在 `naiV5Spec` / `naiV5Thinking`
 (键名带 V5 是历史命名,内容对 4.5 同样适用,面板标签已改成不提代数的「NAI 规范/思维链」)。
+两对都可能落在 NAI 渠道下(切口径即换对),别按渠道去理解设置页那四行。
 另有 `naiSpec` / `naiThinking` 是 4.5 以下的单串 tag 版本,随旧模型下线(见 §6 `NAI_MODELS`)
-**已无 UI 入口**:可选模型只剩 4.5/V5 → `naiCharPromptsOn` 恒真 → 那两份永远走不到。
-键与常量都刻意保留(不动存量 settings、不动旧模型标识的协议分支与回归锁),
-但**改 NAI 规范/思维链一律改 `DEFAULT_NAI_V5_*` 那一对**,别去改看着名字更正的那份。
+**已无 UI 入口**:口径为 `nai` 时可选模型只剩 4.5/V5 → `naiCharPromptsOn` 必真;口径切到
+`comfy` 时走的是 `comfySpec`,同样落不到那两份。键与常量都刻意保留(不动存量 settings、
+不动旧模型标识的协议分支与回归锁),但**改 NAI 规范/思维链一律改 `DEFAULT_NAI_V5_*` 那一对**,
+别去改看着名字更正的那份。
 
 ## 6. 链路 B:楼层卡片与出图(floor/ + backends/)
 

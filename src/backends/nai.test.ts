@@ -47,6 +47,8 @@ function nai(overrides: Partial<NaiSettings> = {}): NaiSettings {
     vibes: [],
     artistPresets: [],
     activeArtistId: '',
+    specProfile: 'nai',
+    naturalLanguage: true,
     ...overrides,
   };
 }

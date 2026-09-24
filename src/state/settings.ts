@@ -233,6 +233,25 @@ export interface NaiEndpoint {
   key: string;
 }
 
+/**
+ * NAI 渠道的提示词规范口径。
+ * - 'nai'  = NAI 原生 Base Prompt + 原生 Character Prompts(characters[] 数组);
+ * - 'comfy'= 借用 ComfyUI 的单串 tag 规范(danbooru 短 tag + 邻接绑定,无 characters[])。
+ *
+ * 为什么允许 NAI 借用别家的口径:Base + Character Prompts 是 NAI 原生协议,但并非对
+ * 所有人所有站都最优——第三方兼容站、以及习惯单串 tag 的用法,单串形态更可控。
+ * 切换**同时**换掉规范与思维链(见 prompt.ts 的 activeSpecProfile),不做两个独立开关:
+ * 思维链的槽位块要求填的每个字段,都得在同套规范里有判据和词表,混搭会让模型被要求
+ * 填规范从未教过的东西。输出结构跟着口径走——切成 'comfy' 后不再输出 characters[]。
+ */
+export type NaiSpecProfile = 'nai' | 'comfy';
+
+/** 规范口径的可选值与显示名(渠道面板下拉用)。 */
+export const NAI_SPEC_PROFILES: { value: NaiSpecProfile; label: string }[] = [
+  { value: 'nai', label: 'NAI 规范（Base + 角色提示词）' },
+  { value: 'comfy', label: 'ComfyUI 规范（单串 tag）' },
+];
+
 /** NAI 连接与出图参数。接入点(地址+密钥)可存多条,见 endpoints。 */
 export interface NaiSettings extends BackendConn {
   /**
@@ -292,6 +311,22 @@ export interface NaiSettings extends BackendConn {
    * 他没选过的画风,每张图都变样却查不出原因。
    */
   activeArtistId: string;
+  /**
+   * 提示词规范口径(见 NaiSpecProfile)。决定自动 tag 请求用哪一套规范与思维链,
+   * 并连带决定输出结构(NAI 口径出 characters[],comfy 口径出单串 tag)。
+   * 只影响 NAI 渠道;默认 'nai' = 保持本字段引入前的行为。
+   */
+  specProfile: NaiSpecProfile;
+  /**
+   * 生成自然语言(默认开)。NAI 口径下 nl 是协议的一部分:Base 一段 nl + 每个
+   * characters[] 项各一段 nl;关闭后规范与思维链都不再要求 nl,模型也不再输出 nl 键,
+   * 最终正向提示词就是纯 tag。comfy 口径下由该口径规范的 {{nl}} 宏承接同一个开关
+   * (与 ComfyUI 工作流预置里的 naturalLanguage 是两个独立渠道各自的开关)。
+   *
+   * 默认 true 是刻意的:本字段引入前 NAI 恒有 nl,默认关会让存量用户升级后画面观感
+   * 突变、而设置项藏在面板里很难联想到。
+   */
+  naturalLanguage: boolean;
 }
 
 /** 界面偏好里要跨设备同步的部分;activePage 等纯本机临时态不在此。 */
@@ -532,10 +567,10 @@ Two girls as the main focus, medium shot, in a park at sunset. The black-haired 
 /**
  * NAI 规范内置默认:与 ComfyUI 规范同构,danbooru 短 tag;质量词由后端按模型自动附加,故禁写。
  *
- * ⚠ 设置页已撤掉本项的编辑入口:模型列表只剩 4.5/V5(见 NAI_MODELS),
- * `naiCharPromptsOn` 恒真,本常量与 settings 里的 `naiSpec` 键都不再可达。
- * 保留是为了不动存量 settings 键、也不动 4.5 以下模型标识的协议分支;
- * 改 NAI 规范请改 DEFAULT_NAI_V5_SPEC(设置页里显示为「NAI 规范」的就是那一份)。
+ * ⚠ 设置页已撤掉本项的编辑入口:模型列表只剩 4.5/V5(见 NAI_MODELS),本常量唯一的使用
+ * 时机是「NAI 后端 + 不支持 Character Prompts 的模型」,该组合已不可达;而 NAI 渠道切到
+ * ComfyUI 口径走的是 comfySpec,也不会落到这里。保留是为了不动存量 settings 键、也不动
+ * 模型标识的协议分支;改 NAI 规范请改 DEFAULT_NAI_V5_SPEC(设置页里显示为「NAI 规范」的就是那一份)。
  */
 export const DEFAULT_NAI_SPEC = `【NovelAI 提示词规范】
 你输出的画面提示词会被直接发送给 NovelAI 生图接口。
@@ -817,7 +852,7 @@ E. 选段
 
 第二层｜逐张图槽位块（E 选定的每个 P 各写一块，不得合并、不得跨图共用一份）
 
-V5 的一张图 = 一个 Base 块 + 每个本图可见的个体角色各一块，与最终 JSON 的 tag/nl 和 characters[] 一一对应。先写 Base 块，再按从左到右、从上到下的顺序逐个写角色块——这个顺序就是 characters[] 的顺序。角色块按 E 段决定的取景写，与他有没有档案无关：【一次性】角色入画时同样各写一块，镜头外的人不写块，也不补进 Base；入画的人群作为整体留在 Base。
+V5 的一张图 = 一个 Base 块 + 每个本图可见的个体角色各一块，与最终 JSON 的 tag、nl（任务协议要求 nl 时）和 characters[] 一一对应。先写 Base 块，再按从左到右、从上到下的顺序逐个写角色块——这个顺序就是 characters[] 的顺序。角色块按 E 段决定的取景写，与他有没有档案无关：【一次性】角色入画时同样各写一块，镜头外的人不写块，也不补进 Base；入画的人群作为整体留在 Base。
 
 ■ P<编号>｜Base
   人数：<2girls / 1boy 1girl 等；只数本图取景框内可见的人，不数场景里在场但不入画的人；无人物画面写 no humans>
@@ -840,7 +875,7 @@ V5 的一张图 = 一个 Base 块 + 每个本图可见的个体角色各一块�
    - 具体禁止这三种写法：带问号的自问（「landscape？」「用 blush？」）、并列候选（「expressionless 或 slight smile」）、写完再推翻（「用 A……不过 B 更好，改 A 为 B」）。心里比较完直接写结论，把比较过程留在心里。证据不足时按兜底口径直接定（size 拿不准写 portrait，服装细节不明就选一套常见且自洽的），定了就往下走。
    - 也不要在槽位里附上选择理由或对 danbooru 词表的检索过程（「looking ahead 不在标准列表」这类）——规范给了什么词，直接从里面挑一个填上。
    - 单一瞬间：一块只能是一次快门完整拍下的画面，不要把先后发生的多个动作、多个时间点或因果过程塞进同一块；剧情事实严格按正文，不编造人物、动作或人数。
-   - **Base 块与角色块的分工是硬边界**：人数、景别、场景、环境光和多人共同参与的互动只进 Base；某一个角色的外貌、服装、表情、视线和个人动作只进他自己那一块，落 JSON 时进他自己的 characters[].tag。绝不能把某人的服装或动作写进 Base，也不能写进别人那一块——V5 靠 Character Prompt 隔离每个人，混进 Base 就等于把这件衣服摊给同框所有人。单人画面唯一角色的动作同样是个人动作：落在他的角色块里，Base 的核心互动槽写 "-"。这条分工对 Base 的 nl 同样成立：Base nl 只写整体场景、空间关系与事件，不写任何单个角色的外貌与服装细节。
+   - **Base 块与角色块的分工是硬边界**：人数、景别、场景、环境光和多人共同参与的互动只进 Base；某一个角色的外貌、服装、表情、视线和个人动作只进他自己那一块，落 JSON 时进他自己的 characters[].tag。绝不能把某人的服装或动作写进 Base，也不能写进别人那一块——V5 靠 Character Prompt 隔离每个人，混进 Base 就等于把这件衣服摊给同框所有人。单人画面唯一角色的动作同样是个人动作：落在他的角色块里，Base 的核心互动槽写 "-"。这条分工在要求 nl 时对 Base 的 nl 同样成立：Base nl 只写整体场景、空间关系与事件，不写任何单个角色的外貌与服装细节。
    - **不要用邻接绑定**：把特征挂到别人的发色词后面（例如把 white dress 直接接在 green hair girl 后面）是单串 tag 后端的做法，V5 不用。这里每个角色有自己独立的一块，直接写 white dress 即可，归属由所在的块决定。
    - 已入画的个体每人各写一块，配角也要写全，不许只给主角写完整一块、配角用一句中文动作带过。表情与视线必须各是一个独立的英文 danbooru 词：写成「看向另一侧、弯腰换鞋」这种中文短语等于这一块没有表情词，落 JSON 时这个角色就会没有表情，被模型画成木脸。
    - 表情与视线填后端规范给出的标准 danbooru 词，不写中文感受也不自创词组（想写「温柔地笑」就填 smile）；只能从规范列出的词里挑，规范没列的词一律不许用，拿不准就填 expressionless / looking at another。两项都不得留空，面无表情也要主动填 expressionless。
@@ -851,9 +886,9 @@ V5 的一张图 = 一个 Base 块 + 每个本图可见的个体角色各一块�
 第三层｜落笔前自查（只核对，不预写答案）
 
 这一层只逐张核对下面几条，每点写一句结论即可。<thinking> 里禁止出现任何最终答案的草稿——不写完整 tag 串、不写完整 nl 句、更不要写出 JSON 对象或 "JSON:" 之类的标题。答案只在 </thinking> 之后出现一次，在思考里先写一遍等于把整份输出付两遍钱。核对完直接闭合 </thinking> 并输出 JSON：
-   - 每张图的 Base tag 逐槽核对过：人数、景别、场景、环境光、多人画面的核心互动，每一项都能在 tag 里找到对应的词，环境光不许漏（光源/时间/色调至少落一个具体词）；nl 与 tag 描述同一画面，且所有 nl（Base 与每个角色）一律用英文写——正文和上面的思考是中文也不例外，中文 nl 会被生图模型读得更差，还要多花几倍 token；角色名是唯一例外：每个角色的 name 与 nl 里出现的名字都逐字对应档案/正文原名（中文名写中文），没有任何音译或变体；每个角色块都变成了 characters[] 里的一项，name/tag/nl 都不为空。
+   - 每张图的 Base tag 逐槽核对过：人数、景别、场景、环境光、多人画面的核心互动，每一项都能在 tag 里找到对应的词，环境光不许漏（光源/时间/色调至少落一个具体词）；角色名逐字对应档案/正文原名（中文名写中文），没有任何音译或变体；每个角色块都变成了 characters[] 里的一项，name 与 tag 都不为空。任务协议要求 nl 时再核对这一组：nl 与 tag 描述同一画面，且所有 nl（Base 与每个角色）一律用英文写——正文和上面的思考是中文也不例外，中文 nl 会被生图模型读得更差，还要多花几倍 token；每个角色的 name 与它 nl 里出现的名字同样逐字对应原名；落 JSON 时 name/tag/nl 三键都不为空。协议没要求 nl 时这一组整组跳过，不得自行补出 nl。
    - 每个剧情 tag 都能追溯到正文/设定；地形、地面、道路、天气和环境状态 tag 没依据就删除。
-   - Base 的 tag 和 nl 里都没有混进任何单个角色的外貌、服装或个人动作；每个角色的服装和个人动作都在他自己的 characters[].tag 里实际出现了，没有谁的服装或动作只写在槽位或 nl 里却没进 tag，也没有 school uniform、pantyhose 这类被简写掉的笼统词；每个角色都各有一个表情词和一个视线词，没有谁只有动作没有表情。
+   - Base 的 tag（要求 nl 时还有 Base 的 nl）里都没有混进任何单个角色的外貌、服装或个人动作；每个角色的服装和个人动作都在他自己的 characters[].tag 里实际出现了，没有谁的服装或动作只写在槽位或 nl 里却没进 tag，也没有 school uniform、pantyhose 这类被简写掉的笼统词；每个角色都各有一个表情词和一个视线词，没有谁只有动作没有表情。
    - 这一层只核对、不改决定：发现问题就在落 tag 时直接改对，不要在思考里写出「超限，需精简」「让位」「改为」这类修订过程。张数在 E 段就已经定死，这里不该再变。
    - 每个同人角色的身份 tag 都逐字照抄自档案 fandom 字段、在其 characters[].tag 的首位，没有放进 Base；同人角色的档案都带 fandom（本次建档或 field:"fandom" 补档），原创角色档案没有 fandom、没有被误加作品名。
    - 若本图是显式 NSFW 场景：可见解剖部位都在所属角色的 tag 里、多人共担的性行为与整体接触在 Base，没有只写泛化 NSFW 词；非显式场景本项直接跳过。
@@ -864,7 +899,14 @@ V5 的一张图 = 一个 Base 块 + 每个本图可见的个体角色各一块�
 /**
  * NAI 规范:4.5 / V5 的 Base Prompt + 原生 Character Prompts。
  *
- * 模型列表收窄到 4.5/V5 后,这就是 NAI 后端**唯一**的一份规范,设置页里显示为「NAI 规范」。
+ * 模型列表收窄到 4.5/V5 后,NAI 口径下这就是**唯一**的一份规范,设置页里显示为「NAI 规范」。
+ * 它是模板而非成品:两处宏由 expandNaiSpec 按「生成自然语言」开关展开——
+ * {{nl}} 展开为 DEFAULT_NAI_NL_SPEC(关闭时置空),{{nl_example}} 在含 nl / 纯 tag 两版示例间切换。
+ * 分开挂两个宏是必须的:示例是格式的最强信号,只置空 {{nl}} 而留下带 nl 键的示例,模型照抄示例
+ * 就等于开关失效(详见 expandNaiSpec 的注释)。
+ *
+ * ⚠ NAI 渠道还可选用 ComfyUI 规范(NaiSettings.specProfile = 'comfy'),那时用 comfySpec
+ * 与 {{nl}} + DEFAULT_COMFY_NL_SPEC 那一套,且输出结构退化为单串 tag(不再有 characters[])。
  *
  * ⚠ 常量名与 settings 键名带 V5 是历史原因(V5 那次开发引入),内容对 4.5 同样适用:
  * char_captions 所在的字段本就叫 v4_prompt,这套 Base + Character Prompts 结构是
@@ -876,8 +918,8 @@ Map every image to one Base Prompt plus zero or more native Character Prompts.
 
 Each image must contain:
 - tag: English comma-separated danbooru tags for the Base Prompt. Put global character counts, scene, composition, camera, lighting, atmosphere, and shared interactions here. Do not put one character's appearance, outfit, or individual action in Base.
-- nl: a coherent English natural-language Base Prompt describing the whole scene, spatial relationships, camera, and overall event. Like the Base tag it stays global: never put one character's appearance, outfit, or individual action in the Base nl; those belong to that character's own nl.
-- characters: an array of the characters actually visible in this image, ordered left-to-right then top-to-bottom. Every item is {"name":"...","tag":"...","nl":"..."}. Membership is decided by the frame, not by the library: a character who is visible but has no library profile still gets an entry (see rule 9). Names of library characters must follow the Name consistency rules below.
+- characters: an array of the characters actually visible in this image, ordered left-to-right then top-to-bottom. Every item is {"name":"...","tag":"..."}. Membership is decided by the frame, not by the library: a character who is visible but has no library profile still gets an entry (see rule 8). Names of library characters must follow the Name consistency rules below.
+{{nl}}
 
 Character Prompt rules:
 1. tag uses English danbooru tags for that character's identity, sex, fixed appearance, current outfit, expression, gaze, pose, action, visible anatomy, and necessary relative position. Use girl/boy rather than 1girl/2girls; numeric counts belong only in Base. Expression and gaze are mandatory for every character and must use real danbooru tags rather than invented descriptive phrases: pick expressions from smile, grin, laughing, blush, embarrassed, frown, pout, puffy cheeks, surprised, crying, tears, angry, serious, sad, worried, scared, smug, seductive smile, expressionless, half-closed eyes, open mouth, clenched teeth; pick one gaze from looking at viewer, looking at another, looking away, looking down, looking up, looking back, closed eyes. Write smile rather than gentle smile and blush rather than shy expression; phrases like neutral curious expression are not tags and only dilute the prompt. Save adjectival nuance for nl. When the story does not state an expression, infer one; write expressionless explicitly rather than omitting it.
@@ -885,18 +927,17 @@ Character Prompt rules:
 3. For every fandom character, the model-recognized English Danbooru identity tag, formatted exactly as character name (copyright name), must be the first tag in that character's tag. The identity tag is stored in the fixed appearance library: when creating the entry (changes field:"new"), register it as the fields.fandom of that entry; when an existing entry lacks it and the character is fandom, add it via a changes item with field:"fandom"; then copy it verbatim every time. Do not escape the parentheses for NovelAI, do not translate the names literally, do not abbreviate the copyright, and do not put this per-character identity tag in Base. Original characters receive no copyright identity tag and no fandom field.
 4. For an explicit NSFW scene. Do not rely on vague tags such as nsfw, nude, or sex: name each actually visible, action-relevant anatomical feature or genital in the owning character's tag, such as breasts, nipples, penis, pussy, anus, or testicles. Do not claim fully covered or out-of-frame anatomy is visible.
 5. Put the shared sexual act and overall contact in Base. Use source# / target# / mutual# tags in Character Prompts when they clarify who acts, which body part is involved, and who or what receives the action. The tags must describe the exact visible contact rather than euphemize it.
-6. nl uses English natural language for the same character's appearance, outfit, action, facing, interaction, visible anatomy, and approximate position. It may add relationship or spatial detail but must not conflict with tag.
-7. For characters in the fixed appearance library, copy the library Tag fields into that character's tag, keeping the fandom identity tag (fields.fandom) first. Keep appearance wording verbatim, but convert the library sex count tag 1girl/1boy to girl/boy. Library natural-language notes may inform that character's nl. Tag fields remain canonical.
-8. For other multi-character interactions, use NovelAI source# / target# / mutual# tags when they clarify actor and target. Do not use ComfyUI's multi-person segmentation convention.
-9. Character Prompts are keyed to the frame, not to the library. Do not create Character Prompts for characters absent from this image. A visible character who has no library profile still belongs in characters[]: when the story treats someone as a single identifiable person — an opponent, a shopkeeper, a passer-by carrying a child — give them their own Character Prompt even though they will never be registered. Use the term the story uses for them as the name (三年级队长, 店主), and complete their appearance once, for this image only. Such an entry is valid for this image alone: never report it in changes, never add it to the library, and never carry it into a later floor. Never invent a personal name for them — a made-up name is indistinguishable from a real profile when this image tag is later read back as context.
-10. People the story treats as a mass rather than as individuals — crowds, soldiers, onlooking students — receive no Character Prompt. Only include them when the chosen frame needs the crowd; then describe them in Base as a group. When unsure whether people already selected for the frame are individuals or a mass, leave them in Base. This is a placement rule for visible people, not a reason to add bystanders or crowds to the image.
+6. For characters in the fixed appearance library, copy the library Tag fields into that character's tag, keeping the fandom identity tag (fields.fandom) first. Keep appearance wording verbatim, but convert the library sex count tag 1girl/1boy to girl/boy. Tag fields remain canonical.
+7. For other multi-character interactions, use NovelAI source# / target# / mutual# tags when they clarify actor and target. Do not use ComfyUI's multi-person segmentation convention.
+8. Character Prompts are keyed to the frame, not to the library. Do not create Character Prompts for characters absent from this image. A visible character who has no library profile still belongs in characters[]: when the story treats someone as a single identifiable person — an opponent, a shopkeeper, a passer-by carrying a child — give them their own Character Prompt even though they will never be registered. Use the term the story uses for them as the name (三年级队长, 店主), and complete their appearance once, for this image only. Such an entry is valid for this image alone: never report it in changes, never add it to the library, and never carry it into a later floor. Never invent a personal name for them — a made-up name is indistinguishable from a real profile when this image tag is later read back as context.
+9. People the story treats as a mass rather than as individuals — crowds, soldiers, onlooking students — receive no Character Prompt. Only include them when the chosen frame needs the crowd; then describe them in Base as a group. When unsure whether people already selected for the frame are individuals or a mass, leave them in Base. This is a placement rule for visible people, not a reason to add bystanders or crowds to the image.
 
 Name consistency (critical — the plugin matches names verbatim):
-- Scope: these rules govern characters who have a library entry or are being registered in this output. They exist to protect verbatim matching against the library. A one-off character from rule 9 participates in no matching at all, so these rules do not apply to them — using a story term such as 三年级队长 as their name breaks nothing.
+- Scope: these rules govern characters who have a library entry or are being registered in this output. They exist to protect verbatim matching against the library. A one-off character from rule 8 participates in no matching at all, so these rules do not apply to them — using a story term such as 三年级队长 as their name breaks nothing.
 - First-time registration: when you register a character via changes field:"new", the name must be exactly the name used for that character in the character card, lorebook, book memory, or story text — a Chinese name stays Chinese (小雪, never Xiaoxue or Snow). Never transliterate, translate, or pinyin-ize a name.
 - Existing profiles: when a character already has a library entry (or was just registered above), every reference to that character — characters[].name and any name appearing inside a tag or nl — must match the library entry name verbatim. A library entry written 小雪 must be referenced as 小雪, not as Xiaoxue or any other variant. A mismatched name can never be matched or replaced by the plugin, and the character loses its fixed appearance.
 
-Both Base and Character Prompts must use Tag + English natural language. Write nl in English even when the story text and your own thinking are in another language: the image model reads English natural language far more reliably, and non-English sentences also cost several times more tokens against the shared prompt budget. Character names are the only exception: they must stay in their original language and spelling (see Name consistency above). Tags stabilize identity and attributes; natural language supplies complex relations and spatial semantics. Do not output quality tags, generic negative tags, artist presets, or XML. The backend adds artist and quality tags.
+Do not output quality tags, generic negative tags, artist presets, or XML. The backend adds artist and quality tags.
 
 Visual completion (important):
 The story text is prose, not a shot list. It will never state camera, lighting, or period costume — the things that only exist once something is drawn. Your job is not to transcribe the text but to complete it into a finished picture. Handle these four classes differently.
@@ -926,7 +967,65 @@ Write landscape for group shots, distant or panoramic views, wide scenes, and ho
 Two characters in frame does not mean the image must be landscape. The direction must agree with the shot distance in Base: wide shot usually pairs with landscape, close-up and upper body usually pair with portrait. When unsure, write portrait.
 
 Example (小雪 is the principal character and has a library profile; 三年级队长 is an unnamed opponent needed to show 小雪's action, not an unrelated bystander. She gets her own Character Prompt, is completed once for this image, and is never registered):
-{"position":"P2","tag":"2girls, rooftop, sunset, medium shot, foot on hand","nl":"Two girls on a rooftop at sunset, one pinning the other's hand under her foot.","characters":[{"name":"小雪","tag":"girl, long black hair, blue eyes, white dress, source#stepping on","nl":"The girl on the left presses her opponent's hand down with one foot."},{"name":"三年级队长","tag":"girl, short brown hair, amber eyes, grey training uniform, lying on ground, surprised, looking up, target#stepped on","nl":"The other girl lies on the ground on the right, her hand pinned, staring up in shock."}],"size":"landscape"}`;
+{{nl_example}}`;
+
+/** nl 规范宏:规范模板里写这个,按「生成自然语言」开关展开/置空(NAI 与 ComfyUI 两份规范同款)。 */
+export const NL_MACRO = '{{nl}}';
+
+/** NAI 规范示例宏:同一份示例随开关切换为「含 nl 键」或「纯 tag」两版。 */
+export const NAI_EXAMPLE_MACRO = '{{nl_example}}';
+
+/**
+ * {{nl}} 宏的展开内容(NAI 口径,「生成自然语言」开启时);关闭时宏展开为空串。
+ *
+ * 内容全部搬自改写前的 DEFAULT_NAI_V5_SPEC(原来散在「必含键」列表、Character Prompt
+ * rules 第 6 条、以及后半段那一段英文要求里),措辞一字未改,只是集中到这里统一受开关控制。
+ * 结尾**不带**换行:模板里宏独占一行、其后自带一个空行,展开后正好收尾;置空则留下三个
+ * 连续换行,由 expandNlMacro 折叠成一个空行。
+ */
+export const DEFAULT_NAI_NL_SPEC = `- nl: a coherent English natural-language Base Prompt describing the whole scene, spatial relationships, camera, and overall event. Like the Base tag it stays global: never put one character's appearance, outfit, or individual action in the Base nl; those belong to that character's own nl.
+- Every item in characters carries its own nl: English natural language for that character's appearance, outfit, action, facing, interaction, visible anatomy, and approximate position. It may add relationship or spatial detail but must not conflict with that character's tag.
+- Write every nl in English even when the story text and your own thinking are in another language: the image model reads English natural language far more reliably, and non-English sentences also cost several times more tokens against the shared prompt budget. Character names are the only exception: they must stay in their original language and spelling (see Name consistency above). Tags stabilize identity and attributes; natural language supplies complex relations and spatial semantics.`;
+
+/** {{nl_example}} 展开内容:开关开启时的示例(含 Base nl 与每角色 nl)。 */
+export const DEFAULT_NAI_V5_EXAMPLE =
+  '{"position":"P2","tag":"2girls, rooftop, sunset, medium shot, foot on hand","nl":"Two girls on a rooftop at sunset, one pinning the other\'s hand under her foot.","characters":[{"name":"小雪","tag":"girl, long black hair, blue eyes, white dress, source#stepping on","nl":"The girl on the left presses her opponent\'s hand down with one foot."},{"name":"三年级队长","tag":"girl, short brown hair, amber eyes, grey training uniform, lying on ground, surprised, looking up, target#stepped on","nl":"The other girl lies on the ground on the right, her hand pinned, staring up in shock."}],"size":"landscape"}';
+
+/** {{nl_example}} 展开内容:开关关闭时的示例,与上一版逐字相同,只去掉全部 nl 键。 */
+export const DEFAULT_NAI_V5_EXAMPLE_TAGS_ONLY =
+  '{"position":"P2","tag":"2girls, rooftop, sunset, medium shot, foot on hand","characters":[{"name":"小雪","tag":"girl, long black hair, blue eyes, white dress, source#stepping on"},{"name":"三年级队长","tag":"girl, short brown hair, amber eyes, grey training uniform, lying on ground, surprised, looking up, target#stepped on"}],"size":"landscape"}';
+
+/**
+ * {{nl}} 宏展开(两份规范共用同一口径):
+ * 模板含宏 → 按开关展开为 nl 规范或空串;不含宏 → 开关开启时把 nl 规范追加在末尾,
+ * 免得用户自定义规范漏写宏时开关静默失效(关闭时不留痕)。
+ * 宏置空后可能留下连续空行(宏独占一行 + 其后本就有的空行),一并折叠掉。
+ */
+export function expandNlMacro(template: string, nlSpec: string, nlOn: boolean): string {
+  const body = template.trim();
+  const addition = nlOn ? nlSpec : '';
+  const resolved = body.includes(NL_MACRO)
+    ? body.replaceAll(NL_MACRO, addition)
+    : addition
+      ? `${body}\n\n${addition}`
+      : body;
+  return resolved.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * NAI 规范展开:先按开关挑示例版本,再展开 {{nl}}——两步缺一不可。
+ * 只展开 {{nl}} 会留下一个仍带 nl 键的示例:示例是格式的最强信号,模型照着示例抄,
+ * 「生成自然语言」关掉也照样输出 nl = 开关静默失效。同理,自定义规范没写示例宏时
+ * 不做任何替换,由用户自己负责(与 {{nl}} 缺失时的兜底口径不同:那一条会追加,
+ * 因为 nl 规范缺失等于开关完全失效,而示例缺失只是少一个示范)。
+ */
+export function expandNaiSpec(template: string, nlOn: boolean): string {
+  const withExample = template.replaceAll(
+    NAI_EXAMPLE_MACRO,
+    nlOn ? DEFAULT_NAI_V5_EXAMPLE : DEFAULT_NAI_V5_EXAMPLE_TAGS_ONLY,
+  );
+  return expandNlMacro(withExample, DEFAULT_NAI_NL_SPEC, nlOn);
+}
 
 /** 预填充内置默认:以 <thinking> 开头,引导模型先过思考清单再输出 JSON。 */
 export const DEFAULT_PREFILL_PROMPT = '<thinking>';
@@ -1100,6 +1199,9 @@ function naiDefaults(): NaiSettings {
     // hydrate 时旧用户的 stored.nai.activeArtistId 已存在(哪怕空串),会被
     // normalizeNai 原样保留,不受影响。
     activeArtistId: BUILTIN_NAI_ARTISTS[0]?.id ?? '',
+    // 规范口径默认 NAI 原生那套;自然语言默认开——两项都等于「本字段引入前的行为」
+    specProfile: 'nai',
+    naturalLanguage: true,
   };
 }
 
@@ -1595,6 +1697,11 @@ function normalizeNai(raw: unknown, def: NaiSettings): NaiSettings {
       : def.vibes,
     artistPresets,
     activeArtistId,
+    // 规范口径/自然语言:存量配置没有这两个键,一律回落默认(nai / true = 行为不变),
+    // 故用 `=== 'comfy'` 而不是把 def 透传——def 只在 defaults() 里是 'nai',
+    // 这里显式判一次,免得日后有人改默认值就悄悄改掉存量用户的迁移结果。
+    specProfile: o.specProfile === 'comfy' ? 'comfy' : 'nai',
+    naturalLanguage: typeof o.naturalLanguage === 'boolean' ? o.naturalLanguage : def.naturalLanguage,
   };
 }
 

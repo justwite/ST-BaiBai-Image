@@ -63,6 +63,7 @@ import {
   newNaiEndpoint,
   NAI_MODELS,
   NAI_OFFICIAL_URL,
+  NAI_SPEC_PROFILES,
   settings,
   type NaiArtistPreset,
   type NaiEndpoint,
@@ -94,6 +95,42 @@ async function onTestConnection() {
     testing.value = false;
   }
 }
+
+/* ============ 提示词规范(规范口径 + 生成自然语言) ============ */
+
+/**
+ * 规范口径一次决定三件事:用哪套书写规范、配哪套思维链、输出什么结构(NAI 原生口径出
+ * Base + characters[],ComfyUI 口径出单串 tag)。故只给一个下拉,不给「规范」「思维链」
+ * 两个——两者必须配对(思维链槽位要填的字段得在同套规范里有判据和词表),给两个只会
+ * 让人配出模型看不懂的组合。
+ *
+ * 取值判据照抄 settings.ts 的 normalizeNai:非 'comfy' 一律当 'nai',不做第三种兜底。
+ */
+const specProfile = computed<string>({
+  get: () => settings.nai.specProfile,
+  set: value => {
+    settings.nai.specProfile = value === 'comfy' ? 'comfy' : 'nai';
+  },
+});
+
+const specProfileHint = computed(() =>
+  specProfile.value === 'comfy'
+    ? '借用 ComfyUI 那套:模型按单串 danbooru tag 写提示词,多人用邻接绑定,不再输出 Base + characters[];思维链同步换成 ComfyUI 那份。'
+    : 'NAI 原生那套:Base Prompt + 原生 Character Prompts(characters[]),思维链为 NAI 那份。',
+);
+
+/**
+ * 自然语言提示:关闭态单独说一句,免得用户以为是界面坏了(卡片上的提示词确实会短一截,
+ * 而且 NAI 从 4.5 起一直是默认带 nl 的,突然没了需要一句交代)。
+ */
+const nlHint = computed(() => {
+  if (!settings.nai.naturalLanguage) {
+    return '关闭后只出 tag,不生成任何自然语言描述——提示词更短、更接近纯 tag 出图习惯。两份规范都跟着不再要求 nl。';
+  }
+  return specProfile.value === 'comfy'
+    ? '开启后在单串 tag 之外再生成一段连贯的英文描述句,随 tag 一起发给 NAI。'
+    : '开启后在 Base tag 与每个角色 tag 之外各生成一段英文自然语言(NAI 4.5/V5 原生支持)。';
+});
 
 /* ============ 接入点库(地址 + 密钥;形制照搬下方画师串行) ============ */
 
@@ -1090,6 +1127,33 @@ async function removeVibe(vibe: NaiVibe) {
         </ul>
         <p class="bbi-field-hint art-hint">
           画师串里没设置正/负面词时，就会用这里的;这里也留空，则按模型取官方词。
+        </p>
+      </Collapsible>
+
+      <Collapsible title="提示词规范" :open="false">
+        <!-- 规范口径:一次换掉「规范 + 思维链 + 输出结构」,故只有一个下拉 -->
+        <div class="bbi-field">
+          <div class="bbi-field-head">
+            <span class="bbi-field-label">规范口径</span>
+          </div>
+          <BbiSelect
+            class="be-select"
+            v-model="specProfile"
+            :options="NAI_SPEC_PROFILES"
+            aria-label="提示词规范口径"
+          />
+          <p class="bbi-field-hint">{{ specProfileHint }}</p>
+        </div>
+
+        <!-- 与口径分开:换口径不替用户改这个开关,两者各自生效 -->
+        <label class="bbi-switch-row">
+          <span class="bbi-field-label">生成自然语言</span>
+          <input v-model="settings.nai.naturalLanguage" type="checkbox" class="bbi-checkbox" />
+        </label>
+        <p class="bbi-field-hint">{{ nlHint }}</p>
+
+        <p class="bbi-field-hint">
+          两套规范的正文在设置页「提示词」区各存一份,可分别自定义;本页只决定用哪一份。
         </p>
       </Collapsible>
 

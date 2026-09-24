@@ -115,9 +115,12 @@ interface TagPromptMeta {
   macros: { token: string; desc: string }[];
 }
 
-// 规范与思维链按后端成对排列:两者必须配对使用(思维链槽位要填的字段,
-// 得在同后端规范里有判据和词表),列在一起是为了改一个时能看见另一个。
-// 不按当前后端过滤——过滤会让「现在用的是哪份」变成隐式状态,反而更难排查。
+// 规范与思维链按口径成对排列:两者必须配对使用(思维链槽位要填的字段,
+// 得在同口径规范里有判据和词表),列在一起是为了改一个时能看见另一个。
+// 不按当前渠道/口径过滤——过滤会让「现在用的是哪份」变成隐式状态,反而更难排查。
+//
+// ⚠ 口径不等于渠道:NAI 渠道可以在面板上把「规范口径」切成 ComfyUI,那时生效的是
+// comfySpec / comfyThinking。所以这四份都可能落在 NAI 渠道下,别按渠道去理解这四行。
 //
 // ⚠ NAI 只列一对,存的是 naiV5Spec / naiV5Thinking(键名带 V5 是历史包袱,见 settings.ts)。
 // 4.5 以下那套单串 tag 的 naiSpec / naiThinking 已随模型列表收窄一起下线,不再列出:
@@ -132,22 +135,31 @@ const TAG_PROMPT_METAS: TagPromptMeta[] = [
   },
   {
     key: 'naiV5Spec',
-    label: 'NAI \u89c4\u8303',
-    hint: '\u9ed8\u8ba4\u540e\u7aef\u4e3a NAI \u65f6\u62fc\u8fdb\u81ea\u52a8 tag \u8bf7\u6c42\uff0c\u5b9a\u4e49 Base Prompt\u3001\u539f\u751f Character Prompts \u4e0e\u82f1\u6587\u81ea\u7136\u8bed\u8a00\uff08nl \u4e00\u5f8b\u5199\u82f1\u6587\uff09\u30024.5 \u4e0e V5 \u5171\u7528\u8fd9\u4e00\u4efd\uff1achar_captions \u672c\u5c31\u662f v4 \u65f6\u4ee3\u7684\u534f\u8bae\uff0c\u4e24\u4ee3\u5199\u6cd5\u53e3\u5f84\u76f8\u540c\u3002\u7559\u7a7a\u7528\u5185\u7f6e\u9ed8\u8ba4\u3002',
+    label: 'NAI 规范',
+    hint: 'NAI 渠道「规范口径」选 NAI 时拼进自动 tag 请求，定义 Base Prompt、原生 Character Prompts 与英文自然语言（nl 一律写英文）。4.5 与 V5 共用这一份：char_captions 本就是 v4 时代的协议，两代写法口径相同。留空用内置默认。',
     builtin: DEFAULT_NAI_V5_SPEC,
-    macros: [],
+    macros: [
+      {
+        token: '{{nl}}',
+        desc: '自然语言要求（Base nl + 每个角色 nl + 英文要求）；NAI 面板开启「生成自然语言」时展开，关闭时整块置空。不写此宏时，开启开关会自动追加到末尾。',
+      },
+      {
+        token: '{{nl_example}}',
+        desc: '文末示例；同样跟着开关在「含 nl 键」与「纯 tag」两版之间切换。示例是格式的最强信号：只置空 {{nl}} 而留下带 nl 的示例，模型会照抄示例，等于开关没关。',
+      },
+    ],
   },
   {
     key: 'naiV5Thinking',
     label: 'NAI 思维链',
-    hint: '默认后端为 NAI 时使用的输出前思考清单，作为 system 压在任务消息之后（解析时会自动剥掉思考块）。槽位块是「Base 块 + 每角色一块」，对应 characters[] 协议，与 ComfyUI 那份的单串形态不通用。与「NAI 规范」配套。留空用内置默认。',
+    hint: 'NAI 渠道「规范口径」选 NAI 时使用的输出前思考清单，作为 system 压在任务消息之后（解析时会自动剥掉思考块）。槽位块是「Base 块 + 每角色一块」，对应 characters[] 协议，与 ComfyUI 那份的单串形态不通用。与「NAI 规范」配套；NAI 渠道切成 ComfyUI 口径时会改用「ComfyUI 思维链」。留空用内置默认。',
     builtin: DEFAULT_NAI_V5_THINKING,
     macros: [],
   },
   {
     key: 'comfySpec',
     label: 'ComfyUI 规范',
-    hint: '默认后端为 ComfyUI 时拼进自动 tag 请求，约束 tag / nl 的书写规范。留空用内置默认。',
+    hint: '规范口径为 ComfyUI 时拼进自动 tag 请求，约束 tag / nl 的书写规范。ComfyUI 渠道恒用这一份；NAI 渠道在面板上把「规范口径」切成 ComfyUI 时也用它（那时输出结构一并变成单串 tag，不再有 characters[]）。留空用内置默认。',
     builtin: DEFAULT_COMFY_SPEC,
     macros: [
       {
@@ -159,7 +171,7 @@ const TAG_PROMPT_METAS: TagPromptMeta[] = [
   {
     key: 'comfyThinking',
     label: 'ComfyUI 思维链',
-    hint: '默认后端为 ComfyUI 时使用的输出前思考清单，作为 system 压在任务消息之后（解析时会自动剥掉思考块）。与「ComfyUI 规范」配套。留空用内置默认。',
+    hint: '规范口径为 ComfyUI 时使用的输出前思考清单，作为 system 压在任务消息之后（解析时会自动剥掉思考块）。与「ComfyUI 规范」配套；NAI 渠道切成 ComfyUI 口径时也用它。留空用内置默认。',
     builtin: DEFAULT_COMFY_THINKING,
     macros: [],
   },
