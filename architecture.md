@@ -255,6 +255,15 @@ runForFloor(floor, opts)
 模型照抄示例 = 开关静默失效。NAI 规范的 nl 内容因此抽成两处宏(`{{nl}}` 与 `{{nl_example}}`),
 由 `expandNaiSpec()` 一并展开;NAI 思维链则照 ComfyUI 那份的先例改用「要求 nl 时」的条件措辞。
 
+⚠ **判据只能有一处。** 口径与 nl 的结论统一由 `prompt.ts` 的 `autoTagProfileState()` 产出,
+`buildAutoTagMessages` 与 `runner.ts` 的建档校验(`requiresNewCharProfileNl()`)共用同一份。
+校验侧曾经自己按 `defaultBackend === 'nai' && naiSupportsCharacterPrompts(model)` 重算,
+NAI 渠道一放开口径就死锁:请求里不再要求建档 nl → 模型不给 nl → 校验判不合格 → 重试耗尽,
+用户只看到「NAI 4.5/V5 建档必须附带 nl 外貌描述」反复刷屏,而看不出真正原因是判据漂移。
+**别在别处重算口径 / `naiCharPromptsOn` / `nlOn` 这三件事**,加消费方就往这里取。
+`prompt.naiSpecProfile.test.ts` 里有一条矩阵用例直接断言「校验判据恒等于请求里是否要求建档 nl」,
+两侧再漂一次会立刻红。
+
 ⚠ **设置页只暴露两对规范/思维链:ComfyUI 与 NAI**,后者存在 `naiV5Spec` / `naiV5Thinking`
 (键名带 V5 是历史命名,内容对 4.5 同样适用,面板标签已改成不提代数的「NAI 规范/思维链」)。
 两对都可能落在 NAI 渠道下(切口径即换对),别按渠道去理解设置页那四行。

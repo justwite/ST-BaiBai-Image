@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildAutoTagMessages } from '@/autoTag/prompt';
+import { autoTagProfileState, buildAutoTagMessages, requiresNewCharProfileNl } from '@/autoTag/prompt';
 import { activeComfyPreset, settings, type AutoTagPrompts, type AutoTagSettings } from '@/state/settings';
 import type { STContext } from '@/st/context';
 
@@ -65,6 +65,8 @@ const MARK = {
   naiNl: '- Every item in characters carries its own nl',
   comfySpec: '【ComfyUI 提示词规范】',
   comfyNl: 'nl（JSON 的 nl 键）：自然语言',
+  /** newCharacterNlRule 的独有句:请求里要求「建档必须带 nl」时就该出现。 */
+  newCharNlRule: 'every field:"new" change must include a non-empty nl',
 } as const;
 
 /** 只用自定义思维链标记做「选了哪一份」的判据:内置两份的开头太像,不如自造标记干净。 */
@@ -107,16 +109,21 @@ function outputShape(text: string): {
 /**
  * 改渠道级开关跑一段用例,跑完原样还原——settings 是同进程共享的单例,
  * 不还原会污染同批次其它用例(与本仓库既有测试同一口径)。
+ * backend 缺省为 'nai'(本文件绝大多数用例都在 NAI 渠道上)。
  */
-async function withNaiSwitch(
-  patch: { specProfile?: 'nai' | 'comfy'; naturalLanguage?: boolean },
+async function withSettings(
+  patch: {
+    backend?: 'nai' | 'comfyui' | 'webui';
+    specProfile?: 'nai' | 'comfy';
+    naturalLanguage?: boolean;
+  },
   run: () => Promise<void>,
 ): Promise<void> {
   const oldBackend = settings.defaultBackend;
   const oldProfile = settings.nai.specProfile;
   const oldNl = settings.nai.naturalLanguage;
   try {
-    settings.defaultBackend = 'nai';
+    settings.defaultBackend = patch.backend ?? 'nai';
     if (patch.specProfile !== undefined) settings.nai.specProfile = patch.specProfile;
     if (patch.naturalLanguage !== undefined) settings.nai.naturalLanguage = patch.naturalLanguage;
     await run();
@@ -129,7 +136,7 @@ async function withNaiSwitch(
 
 describe('NAI 渠道的规范口径与自然语言开关', () => {
   it('默认口径 = NAI:用 NAI 规范 + NAI 思维链,输出 Base + characters[] + nl', async () => {
-    await withNaiSwitch({ specProfile: 'nai', naturalLanguage: true }, async () => {
+    await withSettings({ specProfile: 'nai', naturalLanguage: true }, async () => {
       const text = await requestText();
 
       expect(text).toContain(MARK.naiSpec);
@@ -154,7 +161,7 @@ describe('NAI 渠道的规范口径与自然语言开关', () => {
   });
 
   it('NAI 口径关掉自然语言:规范不再要求 nl,示例与协议里也不留 nl 键', async () => {
-    await withNaiSwitch({ specProfile: 'nai', naturalLanguage: false }, async () => {
+    await withSettings({ specProfile: 'nai', naturalLanguage: false }, async () => {
       const text = await requestText();
 
       expect(text).toContain(MARK.naiSpec);
@@ -177,7 +184,7 @@ describe('NAI 渠道的规范口径与自然语言开关', () => {
   });
 
   it('口径切到 ComfyUI:规范与思维链成对换掉,输出结构退化为单串 tag', async () => {
-    await withNaiSwitch({ specProfile: 'comfy', naturalLanguage: true }, async () => {
+    await withSettings({ specProfile: 'comfy', naturalLanguage: true }, async () => {
       const text = await requestText();
 
       expect(text).toContain(MARK.comfySpec);
@@ -196,7 +203,7 @@ describe('NAI 渠道的规范口径与自然语言开关', () => {
   });
 
   it('ComfyUI 口径 + 自然语言关:{{nl}} 展开为空,示例只剩 tag', async () => {
-    await withNaiSwitch({ specProfile: 'comfy', naturalLanguage: false }, async () => {
+    await withSettings({ specProfile: 'comfy', naturalLanguage: false }, async () => {
       const text = await requestText();
 
       expect(text).toContain(MARK.comfySpec);
@@ -244,5 +251,87 @@ describe('NAI 渠道的规范口径与自然语言开关', () => {
     } finally {
       settings.defaultBackend = oldBackend;
     }
+  });
+});
+
+/**
+ * 回归:NAI 渠道切到 ComfyUI 口径后,建档校验不能再拿 nl 卡人。
+ *
+ * 起因是一个真实的死锁 bug——`runner.ts` 的建档校验当时按
+ * `defaultBackend === 'nai' && naiSupportsCharacterPrompts(model)` 判断要不要 nl,
+ * 而请求侧的要求已经改成跟着**规范口径**走。于是 NAI 渠道切口径后:
+ * 请求里不再要求建档 nl → 模型不给 nl → 校验判不合格 → 重试 → 耗尽,
+ * 用户看到的就是「NAI 4.5/V5 建档必须附带 nl 外貌描述」反复刷屏。
+ *
+ * 下面这条用例不硬编码期望值,而是直接断言**两侧判据一致**:
+ * 请求里出现了「建档必须带 nl」这条要求 ⟺ 校验会拿 nl 卡建档。
+ * 这样任何一侧再被改动而另一侧没跟上,用例立刻红。
+ */
+describe('建档 nl 校验与请求要求同源', () => {
+  it('三个渠道 × 口径 × nl 开关全组合:校验判据恒等于请求里是否要求建档 nl', async () => {
+    const backends = ['nai', 'comfyui', 'webui'] as const;
+    const profiles = ['nai', 'comfy'] as const;
+    const askedCombos: string[] = [];
+    for (const backend of backends) {
+      for (const specProfile of profiles) {
+        for (const naturalLanguage of [true, false]) {
+          await withSettings({ backend, specProfile, naturalLanguage }, async () => {
+            const text = await requestText();
+            const asked = text.includes(MARK.newCharNlRule);
+            const enforced = requiresNewCharProfileNl();
+            if (asked) askedCombos.push(`${backend}/${specProfile}/${naturalLanguage}`);
+            expect([backend, specProfile, naturalLanguage, enforced]).toEqual([
+              backend,
+              specProfile,
+              naturalLanguage,
+              asked,
+            ]);
+          });
+        }
+      }
+    }
+    // 矩阵确实全跑到(12 格),且要求建档 nl 的只有「NAI 渠道 + NAI 口径 + nl 开」这一格
+    expect(askedCombos).toEqual(['nai/nai/true']);
+  });
+
+  it('复现原始故障:NAI 渠道 + ComfyUI 口径 → 校验放行不带 nl 的建档', async () => {
+    await withSettings({ backend: 'nai', specProfile: 'comfy', naturalLanguage: true }, async () => {
+      const text = await requestText();
+      expect(text).not.toContain(MARK.newCharNlRule);
+      expect(requiresNewCharProfileNl()).toBe(false);
+    });
+  });
+
+  it('NAI 口径 + nl 开仍照旧卡:这条保护不能被顺手删掉', async () => {
+    await withSettings({ backend: 'nai', specProfile: 'nai', naturalLanguage: true }, async () => {
+      const text = await requestText();
+      expect(text).toContain(MARK.newCharNlRule);
+      expect(requiresNewCharProfileNl()).toBe(true);
+    });
+  });
+
+  it('autoTagProfileState 三键与请求实际所用的一致(口径/characters 协议/nl)', async () => {
+    await withSettings({ backend: 'nai', specProfile: 'comfy', naturalLanguage: true }, async () => {
+      expect(autoTagProfileState()).toEqual({
+        profile: 'comfy',
+        naiCharPromptsOn: false,
+        nlOn: true,
+      });
+    });
+    await withSettings({ backend: 'nai', specProfile: 'nai', naturalLanguage: false }, async () => {
+      expect(autoTagProfileState()).toEqual({
+        profile: 'nai',
+        naiCharPromptsOn: true,
+        nlOn: false,
+      });
+    });
+    await withSettings({ backend: 'webui', naturalLanguage: true }, async () => {
+      // webui 不附加规范,所以哪怕 NAI 面板的开关开着也不要求 nl
+      expect(autoTagProfileState()).toEqual({
+        profile: 'none',
+        naiCharPromptsOn: false,
+        nlOn: false,
+      });
+    });
   });
 });

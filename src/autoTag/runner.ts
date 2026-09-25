@@ -1,5 +1,4 @@
 import { requestCompletion, requestViaMainApi } from '@/api/client';
-import { naiSupportsCharacterPrompts } from '@/backends/nai';
 import { readBookMemory } from '@/autoTag/bookMemory';
 import {
   applyPositionedCharRefs,
@@ -8,7 +7,7 @@ import {
 } from '@/autoTag/charAnchors';
 import { prepareTargetText } from '@/autoTag/clean';
 import { beginGeneration, clearGeneration, consumeGeneration } from '@/autoTag/generationGate';
-import { buildAutoTagMessages } from '@/autoTag/prompt';
+import { buildAutoTagMessages, requiresNewCharProfileNl } from '@/autoTag/prompt';
 import { rebaseImagePositions, type RebaseReport } from '@/autoTag/rebase';
 import { buildSlotTaskNote } from '@/autoTag/slotPlan';
 import {
@@ -345,10 +344,14 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
           );
           // 单槽重写忽略本次 changes,不校验建档 nl —— 校验它会为一份会被丢弃的
           // changes 白白消耗重试次数。
+          //
+          // ⚠ 判据必须取 requiresNewCharProfileNl(),不许在这里重算 backend/model:
+          // NAI 渠道把规范口径切成 ComfyUI 后请求里已不再要求建档 nl,还按 backend 卡就是
+          // 让每一次输出都判不合格——重试耗尽,用户只看到「建档必须附带 nl 外貌描述」,
+          // 完全看不出真正原因是校验与请求用了两个判据。
           if (
             !slot &&
-            settings.defaultBackend === 'nai' &&
-            naiSupportsCharacterPrompts(settings.nai.model) &&
+            requiresNewCharProfileNl() &&
             candidate.changes.some(change => change.field === 'new' && !change.nl?.trim())
           ) {
             throw new Error('NAI 4.5/V5 建档必须附带 nl 外貌描述');

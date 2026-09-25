@@ -54,6 +54,50 @@ function activeSpecProfile(): SpecProfile {
 }
 
 /**
+ * 「生成自然语言」开关按渠道各管各的:NAI 读渠道面板,ComfyUI 读当前工作流预设。
+ * webui 渠道路径上不附加任何规范(口径恒 'none'),自然也不要求 nl。
+ */
+function resolveNlOn(): boolean {
+  if (settings.defaultBackend === 'nai') return settings.nai.naturalLanguage;
+  if (settings.defaultBackend === 'comfyui') return !!activeComfyPreset()?.naturalLanguage;
+  return false;
+}
+
+/**
+ * 本次自动 tag 请求的口径与 nl 判据。
+ *
+ * ⚠ 这必须是**唯一**判据,禁止在别处重算。规范装配(prompt.ts)决定「请求里要求什么」,
+ * 建档校验(runner.ts)决定「验收时卡什么」——两处一旦不同步就是死锁:请求里没要求 nl,
+ * 校验却拿 nl 卡建档,模型的每一次输出都判不合格、重试耗尽,而用户只看到
+ * 「建档必须附带 nl 外貌描述」刷屏,完全看不出真正原因是判据漂移。
+ * (这正是 NAI 渠道放开规范口径后踩过的 bug:校验侧还在按 backend/model 判断。)
+ */
+export function autoTagProfileState(): {
+  profile: SpecProfile;
+  /** 是否走 NAI 原生 characters[] 协议。只由口径决定,与 nl 开关无关。 */
+  naiCharPromptsOn: boolean;
+  /** 本次请求是否要求模型输出 nl。 */
+  nlOn: boolean;
+} {
+  const profile = activeSpecProfile();
+  return {
+    profile,
+    naiCharPromptsOn: profile === 'nai' && naiSupportsCharacterPrompts(settings.nai.model),
+    nlOn: resolveNlOn(),
+  };
+}
+
+/**
+ * 建档(new)是否必须带 nl 外貌描述 —— 与 buildAutoTagMessages 里 newCharacterNlRule
+ * 的生效条件一字对应,两边共用同一个判据,免得再漂一次。
+ * = NAI 原生口径 + 自然语言开启:两者缺一,请求里都不会要求建档 nl。
+ */
+export function requiresNewCharProfileNl(): boolean {
+  const { naiCharPromptsOn, nlOn } = autoTagProfileState();
+  return naiCharPromptsOn && nlOn;
+}
+
+/**
  * 按规范口径取 tag 书写规范:
  * - nai → naiV5Spec(留空回落内置默认);它是模板,由 expandNaiSpec 按自然语言开关
  *   展开 {{nl}} 与 {{nl_example}} 两处宏。
@@ -167,19 +211,11 @@ export async function buildAutoTagMessages(
     Promise.resolve(fetchUserPersona(context)),
   ]);
 
-  // 规范口径:NAI 渠道可在面板上切到 ComfyUI 那套(见 NaiSettings.specProfile)。
-  // 它同时决定规范文本、思维链与输出结构,三者必须取同一个值,故只在这里解析一次。
-  const profile = activeSpecProfile();
-  // characters[] 协议只属于 NAI 原生口径:切口径即切输出结构,
-  // 否则会出现「规范教单串 tag、协议却仍要求 characters[]」的自相矛盾。
-  const naiCharPromptsOn = profile === 'nai' && naiSupportsCharacterPrompts(settings.nai.model);
+  // 口径与 nl 判据统一从 autoTagProfileState() 取(唯一来源;runner.ts 的建档校验共用同一份)。
+  const { profile, naiCharPromptsOn, nlOn } = autoTagProfileState();
+  // 动态负面词门槛仍按**渠道**取当前工作流预设:NAI 渠道借了 comfy 口径,
+  // 也不该去吃 ComfyUI 工作流的负面词配置。
   const comfyPreset = settings.defaultBackend === 'comfyui' ? activeComfyPreset() : null;
-  // 自然语言开关按渠道各管各的:NAI 看渠道面板的「生成自然语言」,ComfyUI 看当前工作流预设。
-  // 与「切了哪套规范」解耦——切口径不替用户改开关,否则切一次就丢一次用户的选择。
-  const nlOn =
-    settings.defaultBackend === 'nai'
-      ? settings.nai.naturalLanguage
-      : !!comfyPreset?.naturalLanguage;
   // 动态负面词门槛:custom 模式看工作流是否含 %negative_prompt%;
   // simple 模式由模板决定(Flux 无真实负面输入,请求了也没地方写)。
   let negativeOn = false;
