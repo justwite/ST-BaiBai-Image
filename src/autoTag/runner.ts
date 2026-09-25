@@ -175,6 +175,27 @@ function planChangeOps(plan: ImagePlan): PositionedCharOp[] {
   return ops.sort((left, right) => left.sourceLine - right.sourceLine);
 }
 
+/**
+ * 建档缺 nl 的处置策略。
+ *
+ * - 还有重试机会 → 返回 Error,由 validate 抛出:给模型一次把 nl 补上的机会
+ *   (抛错是重试机制唯一的触发方式,「返回校验不通过」正是它要处理的场景)。
+ * - 最后一次尝试 → 返回 null(放行)。
+ *
+ * 为什么最后一次必须放行:建档 nl 是**可选元数据**——charTags 的 normalizeEntry 接受空 nl,
+ * charAnchors 的 nl 模式取不到也会回落到 tag 串。为它作废整批输出,用户会同时丢掉
+ * 这一楼的全部图片与全部角色建档,代价和收益完全不成比例。
+ * 这也顺带堵住「判据漂移 → 每次输出都判不合格 → 重试耗尽」那类故障的爆炸半径:
+ * 那时候每一次尝试都会被拒,而根本原因是校验与请求用了两个判据,用户只会看到
+ * 「建档必须附带 nl 外貌描述」反复刷屏,完全看不出问题在哪。
+ *
+ * 导出仅为单测:这段策略一旦退回「永远抛错」,用户又会整楼丢图丢档案。
+ */
+export function missingProfileNlVerdict(missingCount: number, lastAttempt: boolean): Error | null {
+  if (missingCount <= 0 || lastAttempt) return null;
+  return new Error('NAI 4.5/V5 建档必须附带 nl 外貌描述');
+}
+
 async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> {
   const context = getContext();
   diagnostic('runForFloor:enter', {
@@ -335,6 +356,9 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
         // parsed 用对象壳装着:validate 闭包写入,await 之后读取——请求成功 + 验收通过才非空。
         // (直接 let 会被 TS 收窄成 null:闭包内的赋值控制流分析看不见。)
         const parsed: { plan: ImagePlan | null } = { plan: null };
+        // 最后一次尝试不再因「建档缺 nl」抛错,改为放行——抛错只该用来换取一次重试,
+        // 换不到重试时再抛就是纯粹地丢掉结果(见 missingProfileNlVerdict 的注释)。
+        const isLastAttempt = attempt >= retries;
         const validate = (raw: string) => {
           const candidate = parseImagePlan(
             raw,
@@ -349,12 +373,18 @@ async function runForFloor(floor: number, opts: RunOptions = {}): Promise<void> 
           // NAI 渠道把规范口径切成 ComfyUI 后请求里已不再要求建档 nl,还按 backend 卡就是
           // 让每一次输出都判不合格——重试耗尽,用户只看到「建档必须附带 nl 外貌描述」,
           // 完全看不出真正原因是校验与请求用了两个判据。
-          if (
-            !slot &&
-            requiresNewCharProfileNl() &&
-            candidate.changes.some(change => change.field === 'new' && !change.nl?.trim())
-          ) {
-            throw new Error('NAI 4.5/V5 建档必须附带 nl 外貌描述');
+          const missingNl =
+            !slot && requiresNewCharProfileNl()
+              ? candidate.changes.filter(change => change.field === 'new' && !change.nl?.trim())
+              : [];
+          const verdict = missingProfileNlVerdict(missingNl.length, isLastAttempt);
+          if (verdict) throw verdict;
+          if (missingNl.length) {
+            // 放行不等于没意见:留一条控制台线索,免得「档案里 nl 是空的」完全无据可查
+            console.warn(
+              `[柏宝绘] ${missingNl.length} 条角色建档缺 nl 外貌描述,已放行(最后一次尝试不再重试):`,
+              missingNl.map(change => change.name),
+            );
           }
           parsed.plan = candidate;
         };

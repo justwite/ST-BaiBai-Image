@@ -8,7 +8,20 @@ import { PLUGIN_VERSION } from '@/version';
 import { reactive } from 'vue';
 
 const CURRENT_VERSION = PLUGIN_VERSION;
-const REMOTE_MANIFEST_URL = 'https://raw.githubusercontent.com/baibai-git/ST-BaiBai-Image/main/manifest.json';
+/**
+ * 远端 manifest 地址。
+ *
+ * ⚠ 这是**本 fork 自己的**仓库,不是上游作者的仓库。本项目从 baibai-git/ST-BaiBai-Image
+ * fork 出来自己维护,更新只该跟自己的仓库比。指向上游会有两个后果:
+ * 1. fork 版本高于上游时**永远查不到更新**(上游还没发),插件里的「更新」按钮一直不出现
+ *    ——用户明明推了新版本却没法更新,这正是把规范口径放开后踩到的那次;
+ * 2. fork 版本低于上游时点更新,会把本 fork 的改动直接覆盖掉。
+ *
+ * 改仓库地址时**这里和 manifest.json 的 homePage 要一起改**,否则两者会各指一边
+ * ——`update.test.ts` 里有一条回归锁盯着这个不变式。
+ */
+export const REMOTE_MANIFEST_URL =
+  'https://raw.githubusercontent.com/justwite/ST-BaiBai-Image/main/manifest.json';
 
 export const updateState = reactive({
   current: CURRENT_VERSION,
